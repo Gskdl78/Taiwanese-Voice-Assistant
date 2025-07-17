@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.tox/
+.coverage
+.pytest_cache/
+*.egg-info/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDE & Editors
+.vscode/
+.idea/
+.project
+.pydevproject
+.settings/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
+static/*.wav
+static/*.mp3
+uploads/*.webm
+uploads/*.wav
+uploads/*.mp3
+
+# Large binary files (users should download separately)
+ffmpeg_bin/
+
+# Build & Distribution
+dist/
+build/
+*.egg-info/
+MANIFEST
+
+# Logs
+*.log
+logs/
+
+# Node.js (if any)
+node_modules/
+
+# Coverage reports
+coverage.xml
+htmlcov/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Environment variables
+.env
+.env.local
+.env.*
+
+# Configuration files
+config.pyc
