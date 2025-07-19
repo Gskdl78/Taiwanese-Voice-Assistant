@@ -199,6 +199,116 @@
             font-size: 1.2em;
             margin-right: 5px;
         }
+
+        /* 性能統計樣式 */
+        .performance-stats {
+            margin: 15px 0;
+            padding: 12px;
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 0.85em;
+            transition: opacity 0.3s ease;
+        }
+
+        .stats-header {
+            font-weight: bold;
+            color: #495057;
+            margin-bottom: 8px;
+            border-bottom: 1px solid #dee2e6;
+            padding-bottom: 4px;
+        }
+
+        .stats-content {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+
+        .stats-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 2px 4px;
+            border-radius: 4px;
+        }
+
+        .stats-item.bottleneck {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+        }
+
+        .step-name {
+            color: #6c757d;
+            font-weight: 500;
+        }
+
+        .step-time {
+            color: #495057;
+            font-family: monospace;
+        }
+
+        .bottleneck-badge {
+            background: #fd7e14;
+            color: white;
+            font-size: 0.7em;
+            padding: 1px 6px;
+            border-radius: 10px;
+            margin-left: 8px;
+        }
+
+        .mode-badge {
+            background: #007bff;
+            color: white;
+            font-size: 0.7em;
+            padding: 2px 8px;
+            border-radius: 12px;
+            margin-left: 10px;
+            font-weight: normal;
+        }
+
+        /* 優化建議樣式 */
+        .optimization-suggestions {
+            margin-top: 12px;
+            padding-top: 8px;
+            border-top: 1px solid #dee2e6;
+        }
+
+        .suggestions-header {
+            font-weight: bold;
+            color: #28a745;
+            margin-bottom: 8px;
+            font-size: 0.9em;
+        }
+
+        .suggestion-item {
+            margin-bottom: 10px;
+            padding: 8px;
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 6px;
+        }
+
+        .suggestion-message {
+            font-weight: 500;
+            color: #856404;
+            margin-bottom: 4px;
+        }
+
+        .suggestion-solutions {
+            font-size: 0.85em;
+            color: #6c757d;
+        }
+
+        .suggestion-solutions ul {
+            margin: 4px 0 0 16px;
+            padding: 0;
+        }
+
+        .suggestion-solutions li {
+            margin: 2px 0;
+            color: #495057;
+        }
     </style>
 </head>
 <body>
@@ -277,6 +387,73 @@
             });
         }
 
+        // 顯示性能統計
+        function showPerformanceStats(stats) {
+            const conversation = document.getElementById('conversation');
+            const statsDiv = document.createElement('div');
+            statsDiv.className = 'performance-stats';
+            
+            let statsHtml = `
+                <div class="stats-header">
+                    <span class="emoji">📊</span>處理性能統計 (總時間: ${stats.total_time.toFixed(3)}秒)
+                    ${stats.mode ? `<span class="mode-badge">${stats.mode.toUpperCase()}模式</span>` : ''}
+                </div>
+                <div class="stats-content">
+            `;
+            
+            // 排序步驟按時間長短
+            const sortedSteps = Object.entries(stats.step_times)
+                .sort(([,a], [,b]) => b - a);
+            
+            for (const [stepName, duration] of sortedSteps) {
+                const percentage = ((duration / stats.total_time) * 100).toFixed(1);
+                const isBottleneck = stepName === stats.bottleneck;
+                statsHtml += `
+                    <div class="stats-item ${isBottleneck ? 'bottleneck' : ''}">
+                        <span class="step-name">${stepName}:</span>
+                        <span class="step-time">${duration.toFixed(3)}秒 (${percentage}%)</span>
+                        ${isBottleneck ? '<span class="bottleneck-badge">瓶頸</span>' : ''}
+                    </div>
+                `;
+            }
+            
+            statsHtml += '</div>';
+            
+            // 添加優化建議
+            if (stats.suggestions && stats.suggestions.length > 0) {
+                statsHtml += '<div class="optimization-suggestions">';
+                statsHtml += '<div class="suggestions-header">🚀 性能優化建議</div>';
+                
+                for (const suggestion of stats.suggestions) {
+                    if (suggestion.type === 'optimization') {
+                        statsHtml += `
+                            <div class="suggestion-item">
+                                <div class="suggestion-message">⚠️ ${suggestion.message}</div>
+                                <div class="suggestion-solutions">
+                                    解決方案：
+                                    <ul>
+                                        ${suggestion.solutions.map(sol => `<li>${sol}</li>`).join('')}
+                                    </ul>
+                                </div>
+                            </div>
+                        `;
+                    }
+                }
+                
+                statsHtml += '</div>';
+            }
+            
+            statsDiv.innerHTML = statsHtml;
+            
+            conversation.appendChild(statsDiv);
+            conversation.scrollTop = conversation.scrollHeight;
+            
+            // 8秒後淡出（因為有更多內容）
+            setTimeout(() => {
+                statsDiv.style.opacity = '0.5';
+            }, 8000);
+        }
+
         // 初始化錄音
         async function initRecording() {
             try {
@@ -311,7 +488,7 @@
                 mediaRecorder.ondataavailable = event => {
                     audioChunks.push(event.data);
                 };
-
+                
                 mediaRecorder.onstop = async () => {
                     // 使用實際的 MIME 類型
                     const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
@@ -320,6 +497,7 @@
                 };
 
                 return true;
+                
             } catch (error) {
                 console.error('麥克風權限錯誤:', error);
                 updateStatus('無法取得麥克風權限', 'error');
@@ -339,7 +517,7 @@
                     const success = await initRecording();
                     if (!success) return;
                 }
-
+                
                 audioChunks = [];
                 mediaRecorder.start();
                 isRecording = true;
@@ -390,20 +568,25 @@
             try {
                 const formData = new FormData();
                 formData.append('audio', audioBlob, 'recording.wav');
-
+                
                 const response = await fetch('/process_audio', {
                     method: 'POST',
                     body: formData
                 });
-
+                
                 const result = await response.json();
-
+                
                 if (response.ok) {
                     // 顯示辨識結果
-                    addMessage(result.recognized_text, true);
+                    addMessage(result.transcription, true);
                     
                     // 顯示 AI 回應
                     addMessage(result.ai_response, false, result.audio_url);
+                    
+                    // 顯示性能統計
+                    if (result.performance_stats) {
+                        showPerformanceStats(result.performance_stats);
+                    }
                     
                     updateStatus('對話完成！可以繼續錄音', 'success');
                     

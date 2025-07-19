@@ -14,24 +14,67 @@ import re
 from flask import Flask, render_template, request, jsonify, send_file
 import librosa
 import soundfile as sf
-from transformers import WhisperProcessor, WhisperForConditionalGeneration, pipeline
+import numpy as np
 import torch
+import torchaudio
+import torchaudio.transforms as T
+from transformers import WhisperProcessor, WhisperForConditionalGeneration, pipeline
 import requests
 from urllib.parse import urlencode, quote
 
 # 匯入新的TTS服務和格式轉換器
-from config import config
 from remote_tts_service import RemoteTtsService
 from romanization_converter import RomanizationConverter
+
+# 匯入性能配置
+try:
+    from performance_config import (
+        get_current_config, get_optimization_suggestions,
+        apply_performance_mode, PERFORMANCE_MODE
+    )
+    PERFORMANCE_CONFIG_AVAILABLE = True
+except ImportError:
+    print("⚠️ 性能配置模組未找到，使用預設配置")
+    PERFORMANCE_CONFIG_AVAILABLE = False
+    PERFORMANCE_MODE = "fast"
 
 app = Flask(__name__)
 
 # 全域變數
-CLEANUP_FILES = config.CLEANUP_FILES
+CLEANUP_FILES = True  # 是否清理臨時檔案
+AUDIO_SAMPLE_RATE = 16000  # 音訊取樣率
+MAX_AUDIO_DURATION = 30  # 最長音訊時間（秒）
+MIN_AUDIO_DURATION = 0.5  # 最短音訊時間（秒）
 
 def debug_print(message):
     """調試輸出函數"""
     print(f"[DEBUG] {message}")
+
+def performance_timer(func_name):
+    """性能計時裝飾器"""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            start_time = time.time()
+            print(f"⏱️  開始執行: {func_name}")
+            
+            try:
+                result = func(*args, **kwargs)
+                end_time = time.time()
+                duration = end_time - start_time
+                print(f"✅ {func_name} 完成 - 耗時: {duration:.3f}秒")
+                return result
+            except Exception as e:
+                end_time = time.time()
+                duration = end_time - start_time
+                print(f"❌ {func_name} 失敗 - 耗時: {duration:.3f}秒 - 錯誤: {e}")
+                raise
+                
+        return wrapper
+    return decorator
+
+def log_step_time(step_name, duration, details=""):
+    """記錄步驟執行時間"""
+    print(f"📊 【{step_name}】耗時: {duration:.3f}秒 {details}")
 
 # 全域變數
 taiwanese_processor = None
@@ -42,22 +85,131 @@ pipeline_asr = None
 remote_tts_service = None
 romanization_converter = None
 
+# 音訊預處理參數
+AUDIO_PREPROCESSING = {
+    "remove_silence": True,  # 移除靜音
+    "noise_reduction": True,  # 降噪
+    "normalize_volume": True,  # 音量正規化
+    "silence_threshold": 0.05,  # 靜音閾值
+    "min_silence_duration": 0.3,  # 最小靜音時間（秒）
+}
+
+def preprocess_audio(audio_path):
+    """
+    音訊預處理函數（使用 GPU 加速）
+    
+    Args:
+        audio_path (str): 輸入音訊檔案路徑
+        
+    Returns:
+        str: 處理後的音訊檔案路徑
+    """
+    try:
+        print(f"🎵 開始音訊預處理: {audio_path}")
+        
+        # 使用 torchaudio 讀取音訊（支援 GPU 加速）
+        waveform, sample_rate = torchaudio.load(audio_path)
+        
+        # 確保單聲道
+        if waveform.size(0) > 1:
+            waveform = torch.mean(waveform, dim=0, keepdim=True)
+        
+        # 重採樣到目標採樣率
+        if sample_rate != AUDIO_SAMPLE_RATE:
+            resampler = T.Resample(sample_rate, AUDIO_SAMPLE_RATE)
+            waveform = resampler(waveform)
+        
+        # 移動到 GPU（如果可用）
+        waveform = waveform.to(device)
+        
+        if AUDIO_PREPROCESSING["remove_silence"]:
+            # 使用 torchaudio 的靜音檢測
+            db_threshold = 20
+            frame_length = 2048
+            hop_length = 512
+            
+            # 計算能量
+            energy = torch.norm(waveform.view(-1, frame_length), dim=1)
+            energy_db = 20 * torch.log10(energy + 1e-10)
+            
+            # 找出非靜音段落
+            mask = energy_db > -db_threshold
+            mask = mask.to(device)
+            
+            # 應用遮罩
+            waveform = waveform.squeeze()
+            non_silent = waveform[mask]
+            waveform = non_silent.unsqueeze(0)
+        
+        if AUDIO_PREPROCESSING["noise_reduction"]:
+            # 使用 GPU 加速的頻譜處理
+            n_fft = 2048
+            hop_length = 512
+            
+            # 計算 STFT
+            spec = torch.stft(
+                waveform.squeeze(),
+                n_fft=n_fft,
+                hop_length=hop_length,
+                window=torch.hann_window(n_fft).to(device),
+                return_complex=True
+            )
+            
+            # 計算頻譜幅度
+            spec_mag = torch.abs(spec)
+            
+            # 估計噪音頻譜
+            noise_estimate = torch.mean(spec_mag[:, :10], dim=1, keepdim=True)
+            
+            # 頻譜減法
+            spec_mag_clean = torch.maximum(spec_mag - noise_estimate, torch.zeros_like(spec_mag))
+            
+            # 重建相位
+            phase = torch.angle(spec)
+            spec_clean = spec_mag_clean * torch.exp(1j * phase)
+            
+            # 反轉 STFT
+            waveform = torch.istft(
+                spec_clean,
+                n_fft=n_fft,
+                hop_length=hop_length,
+                window=torch.hann_window(n_fft).to(device),
+                length=waveform.size(-1)
+            )
+            waveform = waveform.unsqueeze(0)
+        
+        if AUDIO_PREPROCESSING["normalize_volume"]:
+            # 音量正規化
+            waveform = waveform / torch.max(torch.abs(waveform))
+        
+        # 移回 CPU 並儲存
+        waveform = waveform.cpu()
+        output_path = audio_path.replace('.wav', '_processed.wav')
+        torchaudio.save(output_path, waveform, AUDIO_SAMPLE_RATE)
+        
+        print(f"✅ 音訊預處理完成: {output_path}")
+        return output_path
+        
+    except Exception as e:
+        print(f"❌ 音訊預處理失敗: {e}")
+        return audio_path
+
 # 意傳科技 API 設定 (根據 TauPhahJi-BangTsam 文檔)
 ITHUAN_API = {
     "標音服務": {
-        "網域": config.ITHUAN_API_BASE_URL,
+        "網域": "https://hokbu.ithuan.tw",
         "端點": "/tau",
         "方法": "POST",
         "內容類型": "application/x-www-form-urlencoded"
     },
     "整段語音合成": {
-        "網域": config.ITHUAN_API_BASE_URL,
+        "網域": "https://hokbu.ithuan.tw",
         "端點": "/bangtsam",
         "方法": "GET",
         "內容類型": "application/x-www-form-urlencoded"
     },
     "單詞語音合成": {
-        "網域": config.ITHUAN_API_BASE_URL,
+        "網域": "https://hokbu.ithuan.tw",
         "端點": "/huan",
         "方法": "GET",
         "內容類型": "application/x-www-form-urlencoded"
@@ -95,73 +247,62 @@ def find_ffmpeg():
 
 def init_taiwanese_model():
     """初始化台語語音辨識模型"""
-    global taiwanese_processor, taiwanese_model, device, ffmpeg_path, pipeline_asr
+    global taiwanese_processor, taiwanese_model, device, ffmpeg_path
     
     debug_print("初始化台語語音辨識系統...")
     
     # 檢查設備
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        print(f"🎮 使用 GPU 加速: {torch.cuda.get_device_name(0)}")
+        print(f"   CUDA 版本: {torch.version.cuda}")
+        print(f"   GPU 記憶體: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+        # 啟用 CUDA 優化
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    else:
+        print("⚠️ 未檢測到 GPU，使用 CPU 模式")
+    
     debug_print(f"設備: {device}")
     
     # 檢查 FFmpeg
     ffmpeg_path = find_ffmpeg()
     debug_print(f"FFmpeg: {ffmpeg_path if ffmpeg_path else '未找到'}")
     
-    # 台語專門模型清單
-    models_to_try = [
-        "NUTN-KWS/Whisper-Taiwanese-model-v0.5",
-        "EricChang/TAT-TD-openai-whisper-large-v2-Lora-epoch5-total5epoch",
-        "cathyi/tw-tw-openai-whisper-large-v2-Lora-epoch5-total5epoch",
-    ]
+    # 台語專門模型
+    model_name = "NUTN-KWS/Whisper-Taiwanese-model-v0.5"
     
     debug_print("載入台語專門模型...")
+    debug_print(f"嘗試載入: {model_name}")
     
-    # 嘗試載入台語模型
-    for model_name in models_to_try:
-        try:
-            debug_print(f"嘗試載入: {model_name}")
-            
-            # 方法1: 使用 transformers 直接載入
-            try:
-                processor = WhisperProcessor.from_pretrained(model_name)
-                model = WhisperForConditionalGeneration.from_pretrained(model_name)
-                model = model.to(device)
-                
-                taiwanese_processor = processor
-                taiwanese_model = model
-                debug_print(f"成功載入台語模型: {model_name}")
-                return True
-                
-            except Exception:
-                # 方法2: 使用 pipeline
-                try:
-                    pipeline_asr = pipeline(
-                        "automatic-speech-recognition",
-                        model=model_name,
-                        device=0 if device == "cuda" else -1,
-                        return_timestamps=True
-                    )
-                    taiwanese_processor = "pipeline"
-                    debug_print(f"成功載入台語模型 (pipeline): {model_name}")
-                    return True
-                except Exception:
-                    continue
-                    
-        except Exception as e:
-            debug_print(f"載入 {model_name} 失敗: {e}")
-            continue
-    
-    # 使用標準 Whisper
-    debug_print("台語模型載入失敗，使用標準 Whisper")
     try:
-        import whisper
-        taiwanese_model = whisper.load_model("base")
-        taiwanese_processor = "whisper_direct"
-        debug_print("標準 Whisper 模型載入成功")
-        return True
+        # 使用 float16 和優化配置
+        load_config = {
+            "torch_dtype": torch.float16 if device == "cuda" else torch.float32,
+            "low_cpu_mem_usage": True,
+            "use_safetensors": True
+        }
         
+        processor = WhisperProcessor.from_pretrained(model_name)
+        model = WhisperForConditionalGeneration.from_pretrained(
+            model_name,
+            **load_config
+        )
+        
+        # 移動到 GPU 並優化
+        model = model.to(device)
+        if device == "cuda":
+            model.eval()  # 設定為評估模式
+        
+        taiwanese_processor = processor
+        taiwanese_model = model
+        
+        debug_print(f"✅ 成功載入台語模型: {model_name}")
+        return True
+            
     except Exception as e:
-        debug_print(f"所有模型載入失敗: {e}")
+        debug_print(f"載入台語模型失敗: {e}")
         taiwanese_processor = None
         taiwanese_model = None
         return False
@@ -175,30 +316,50 @@ def convert_webm_with_ffmpeg(webm_file):
         return None
     
     try:
-        debug_print("使用 FFmpeg 轉換...")
+        debug_print(f"使用 FFmpeg 轉換: {webm_file}")
         
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
-            temp_wav_path = temp_wav.name
+        # 檢查輸入檔案
+        if not os.path.exists(webm_file):
+            debug_print(f"輸入檔案不存在: {webm_file}")
+            return None
+            
+        # 建立臨時檔案
+        temp_wav = os.path.join(
+            os.path.dirname(webm_file),
+            f"temp_{int(time.time()*1000)}.wav"
+        )
         
+        # FFmpeg 命令
         cmd = [
-            ffmpeg_path, '-i', webm_file, 
-            '-ar', '16000',
-            '-ac', '1',
-            '-y',
-            temp_wav_path
+            ffmpeg_path,
+            '-y',  # 覆寫輸出檔案
+            '-i', webm_file,  # 輸入
+            '-acodec', 'pcm_s16le',  # 音訊編碼
+            '-ar', '16000',  # 採樣率
+            '-ac', '1',  # 單聲道
+            '-hide_banner',  # 隱藏橫幅
+            '-loglevel', 'error',  # 只顯示錯誤
+            temp_wav  # 輸出
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        debug_print(f"執行命令: {' '.join(cmd)}")
+        
+        # 執行轉換
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True
+        )
         
         if result.returncode == 0:
-            debug_print("FFmpeg 轉換成功")
-            audio, sr = librosa.load(temp_wav_path, sr=16000)
-            os.unlink(temp_wav_path)
-            return audio, sr
+            if os.path.exists(temp_wav) and os.path.getsize(temp_wav) > 0:
+                debug_print(f"FFmpeg 轉換成功: {temp_wav}")
+                return temp_wav
+            else:
+                debug_print("轉換後的檔案無效")
+                return None
         else:
             debug_print(f"FFmpeg 轉換失敗: {result.stderr}")
-            if os.path.exists(temp_wav_path):
-                os.unlink(temp_wav_path)
             return None
             
     except Exception as e:
@@ -207,7 +368,7 @@ def convert_webm_with_ffmpeg(webm_file):
 
 def transcribe_taiwanese_audio(audio_file_path):
     """台語語音辨識"""
-    global taiwanese_processor, taiwanese_model, pipeline_asr, device
+    global taiwanese_processor, taiwanese_model, device
     
     try:
         debug_print(f"開始台語語音辨識: {audio_file_path}")
@@ -222,15 +383,23 @@ def transcribe_taiwanese_audio(audio_file_path):
         
         if audio_file_path.lower().endswith('.webm'):
             debug_print("處理 WebM 格式...")
-            result = convert_webm_with_ffmpeg(audio_file_path)
-            if result:
-                audio_data, sr = result
+            converted_path = convert_webm_with_ffmpeg(audio_file_path)
+            if converted_path:
+                try:
+                    audio_data, sr = librosa.load(converted_path, sr=16000, mono=True)
+                    os.unlink(converted_path)  # 清理臨時檔案
+                    debug_print("WebM 轉換成功")
+                except Exception as e:
+                    debug_print(f"WebM 音檔載入失敗: {e}")
+                    if os.path.exists(converted_path):
+                        os.unlink(converted_path)
+                    return ""
             else:
                 debug_print("WebM 轉換失敗")
                 return ""
         else:
             try:
-                audio_data, sr = librosa.load(audio_file_path, sr=16000)
+                audio_data, sr = librosa.load(audio_file_path, sr=16000, mono=True)
                 debug_print("音檔載入成功")
             except Exception as e:
                 debug_print(f"音檔載入失敗: {e}")
@@ -242,72 +411,69 @@ def transcribe_taiwanese_audio(audio_file_path):
         
         debug_print(f"音檔資訊: 長度={len(audio_data)}, 取樣率={sr}")
         
-        transcription = ""
-        
-        # 方法1: 使用台語 transformers 模型
-        if taiwanese_processor and taiwanese_model and taiwanese_processor != "pipeline" and taiwanese_processor != "whisper_direct":
-            try:
-                debug_print("使用台語 transformers 模型...")
-                inputs = taiwanese_processor(audio_data, sampling_rate=sr, return_tensors="pt")
-                inputs = inputs.to(device)
+        # 使用台語 transformers 模型
+        try:
+            debug_print("使用台語 transformers 模型...")
+            
+            # 計算特徵
+            input_features = taiwanese_processor.feature_extractor(
+                audio_data, 
+                sampling_rate=sr,
+                return_tensors="pt"
+            )
+            
+            # 移動到 GPU
+            input_features = input_features.to(device)
+            
+            # 使用混合精度推理
+            with torch.cuda.amp.autocast():
+                generated_ids = taiwanese_model.generate(
+                    input_features.input_features,
+                    max_length=225,
+                    language="zh",
+                    task="transcribe",
+                    num_beams=1,
+                    do_sample=False
+                )
                 
-                with torch.no_grad():
-                    predicted_ids = taiwanese_model.generate(inputs["input_features"])
-                    transcription = taiwanese_processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
-                
-                debug_print(f"transformers 辨識成功: '{transcription}'")
-                
-            except Exception as e:
-                debug_print(f"transformers 模型失敗: {e}")
-        
-        # 方法2: 使用 pipeline
-        if not transcription and pipeline_asr and taiwanese_processor == "pipeline":
-            try:
-                debug_print("使用 pipeline 模型...")
-                temp_wav = f"temp_{int(time.time())}.wav"
-                sf.write(temp_wav, audio_data, sr)
-                
-                result = pipeline_asr(temp_wav)
-                transcription = result["text"]
-                
-                if os.path.exists(temp_wav):
-                    os.unlink(temp_wav)
-                
-                debug_print(f"pipeline 辨識成功: '{transcription}'")
-                
-            except Exception as e:
-                debug_print(f"pipeline 模型失敗: {e}")
-        
-        # 方法3: 使用標準 Whisper
-        if not transcription and taiwanese_model and taiwanese_processor == "whisper_direct":
-            try:
-                debug_print("使用標準 Whisper 模型...")
-                temp_wav = f"temp_{int(time.time())}.wav"
-                sf.write(temp_wav, audio_data, sr)
-                
-                result = taiwanese_model.transcribe(temp_wav, language="zh")
-                transcription = result["text"]
-                
-                if os.path.exists(temp_wav):
-                    os.unlink(temp_wav)
-                
-                debug_print(f"Whisper 辨識成功: '{transcription}'")
-                
-            except Exception as e:
-                debug_print(f"Whisper 模型失敗: {e}")
-        
-        if transcription:
-            transcription = transcription.strip()
-            debug_print(f"最終辨識結果: '{transcription}'")
+                transcription = taiwanese_processor.batch_decode(
+                    generated_ids,
+                    skip_special_tokens=True
+                )[0].strip()
+            
+            # 清理 GPU 記憶體
+            if device == "cuda":
+                torch.cuda.empty_cache()
+            
+            debug_print(f"辨識成功: '{transcription}'")
             return transcription
-        else:
-            debug_print("所有辨識方法都失敗")
+            
+        except Exception as e:
+            debug_print(f"辨識失敗: {e}")
             return ""
             
     except Exception as e:
         debug_print(f"語音辨識出錯: {e}")
         return ""
 
+def clean_transcription_result(text):
+    """清理辨識結果文字"""
+    if not text:
+        return text
+        
+    # 移除多餘的空格
+    text = re.sub(r'\s+', ' ', text)
+    
+    # 移除特殊標記
+    text = re.sub(r'<[^>]+>', '', text)
+    
+    # 修正常見錯誤
+    text = text.replace('台語:', '')
+    text = text.replace('台羅:', '')
+    
+    return text.strip()
+
+@performance_timer("台語標音轉換")
 def get_taiwanese_pronunciation(text):
     """調用意傳科技標音 API"""
     try:
@@ -324,6 +490,7 @@ def get_taiwanese_pronunciation(text):
         
         debug_print(f"API 請求: {url}")
         
+        api_start = time.time()
         response = requests.post(
             url,
             data=data,
@@ -333,6 +500,8 @@ def get_taiwanese_pronunciation(text):
             },
             timeout=15
         )
+        api_time = time.time() - api_start
+        log_step_time("　├─ 意傳標音API", api_time, f"狀態: {response.status_code}")
         
         debug_print(f"回應狀態: {response.status_code}")
         
@@ -547,75 +716,83 @@ def text_to_speech_ithuan_single_word(羅馬拼音):
 
 
 
+@performance_timer("LLM智能對話")
 def chat_with_ollama(text):
     """與 Ollama LLM 對話"""
     try:
         debug_print(f"LLM 對話處理: '{text}'")
         
-        prompt = f"""你是一個親切的台語助手。請用台語漢字簡短回應以下話語：
+        # 使用繁體中文回應，限制15字以內
+        prompt = f"""你是一個台灣人工智慧助理，請用繁體中文回應。注意：
+1. 使用自然、流暢的繁體中文
+2. 不要使用簡體字
+3. 回答必須在15個字以內
+4. 保持對話的連貫性和邏輯性
 
-規則：
-- 只能回應 3-8 個字
-- 使用常見的繁體中文漢字
-- 語氣要親切自然
-- 不要重複同一個字超過 2 次
-- 要符合台語的說話習慣
+用戶：{text}
 
-用戶說：{text}
+助理："""
 
-台語回應："""
-
-        response = requests.post(f'{config.OLLAMA_BASE_URL}/api/generate', 
+        api_start = time.time()
+        
+        # 使用性能配置的優化參數
+        if PERFORMANCE_CONFIG_AVAILABLE:
+            config = get_current_config()
+            llm_options = config["llm_config"].copy()
+            timeout = llm_options.pop("timeout", 15)
+            debug_print(f"使用性能配置LLM參數: {llm_options}")
+        else:
+            # 備用優化參數
+            llm_options = {
+                'temperature': 0.7,
+                'top_p': 0.9,
+                'top_k': 40,
+                'repeat_penalty': 1.1,
+                'num_thread': 4,
+                'num_batch': 512,
+            }
+            timeout = 15
+        
+        response = requests.post('http://localhost:11434/api/generate', 
             json={
-                'model': config.OLLAMA_MODEL,
+                'model': 'gemma3:4b',
                 'prompt': prompt,
                 'stream': False,
-                'options': {
-                    'temperature': 0.6,
-                    'num_predict': 30,
-                    'top_p': 0.9
-                }
+                'options': llm_options
             },
-            timeout=20
+            timeout=timeout
         )
+        api_time = time.time() - api_start
+        log_step_time("　├─ Ollama API請求", api_time)
         
         if response.status_code == 200:
             result = response.json()
             reply = result.get('response', '').strip()
             
-            # 清理回應
-            cleaned_reply = re.sub(r'[^\u4e00-\u9fff！？。，、]', '', reply)
+            # 清理回應，但保留標點符號
+            cleaned_reply = re.sub(r'[^\u4e00-\u9fff！？。，、：；「」『』（）]', '', reply)
             
-            # 移除重複超過 2 次的字符
-            def remove_excessive_repeats(text):
-                result = ""
-                char_count = {}
-                for char in text:
-                    char_count[char] = char_count.get(char, 0) + 1
-                    if char_count[char] <= 2:
-                        result += char
-                return result
-            
-            cleaned_reply = remove_excessive_repeats(cleaned_reply)
-            
-            if len(cleaned_reply) > 8:
-                cleaned_reply = cleaned_reply[:8]
-            
-            if len(cleaned_reply) < 2:
-                final_reply = "好欸！"
+            # 如果清理後的回應為空，返回預設回應
+            if not cleaned_reply:
+                final_reply = "好的！"
             else:
-                final_reply = cleaned_reply
+                # 限制回應在15個字以內
+                if len(cleaned_reply) > 15:
+                    final_reply = cleaned_reply[:15]
+                else:
+                    final_reply = cleaned_reply
                 
             debug_print(f"LLM 回應: '{final_reply}'")
             return final_reply
         else:
             debug_print(f"LLM API 失敗: {response.status_code}")
-            return "好欸！"
+            return "好的！"
             
     except Exception as e:
         debug_print(f"LLM 對話失敗: {e}")
-        return "好欸！"
+        return "好的！"
 
+@performance_timer("意傳科技TTS服務")
 def text_to_speech_ithuan(text, kiatko_data=None):
     """意傳科技 TTS 主函數（整合整段和單詞合成）"""
     print(f"🔊 意傳科技 TTS 開始: '{text}'")
@@ -649,20 +826,34 @@ def index():
 def process_audio():
     """處理語音檔案"""
     global remote_tts_service, romanization_converter
+    
+    # 總體計時開始
+    total_start_time = time.time()
+    print(f"🚀 開始處理語音請求 - {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # 各步驟計時統計
+    step_times = {}
+    
     try:
+        # 步驟0: 請求驗證
+        step_start = time.time()
         if 'audio' not in request.files:
             return jsonify({'error': '沒有收到音檔'}), 400
-        
+            
         audio_file = request.files['audio']
         
         if audio_file.filename == '':
             return jsonify({'error': '音檔名稱為空'}), 400
+        step_times['請求驗證'] = time.time() - step_start
+        log_step_time("請求驗證", step_times['請求驗證'])
             
+        # 步驟1: 音檔保存
+        step_start = time.time()
         # 建立本地保存目錄
         os.makedirs("uploads", exist_ok=True)
         
         # 決定檔案副檔名
-        content_type = getattr(audio_file, 'content_type', 'unknown')
+        content_type = audio_file.content_type or 'audio/webm'
         if 'webm' in content_type:
             suffix = '.webm'
         elif 'wav' in content_type:
@@ -693,71 +884,131 @@ def process_audio():
         if not os.path.exists(local_filename) or os.path.getsize(local_filename) == 0:
             return jsonify({'error': '保存的音檔無效'}), 400
         
+        step_times['音檔保存'] = time.time() - step_start
+        log_step_time("音檔保存", step_times['音檔保存'], f"檔案大小: {len(audio_data)} bytes")
+        
         try:
             debug_print("開始台語語音對話處理")
             
-            # 1. 台語語音辨識
-            recognized_text = transcribe_taiwanese_audio(local_filename)
+            # 步驟2: 音檔格式轉換（如果需要）
+            step_start = time.time()
+            audio_path = local_filename
+            if suffix != '.wav':
+                converted_path = convert_webm_with_ffmpeg(local_filename)
+                if converted_path:
+                    audio_path = converted_path
+                else:
+                    return jsonify({'error': '音檔格式轉換失敗'}), 400
+            step_times['格式轉換'] = time.time() - step_start
+            log_step_time("音檔格式轉換", step_times['格式轉換'])
+            
+            # 步驟3: 台語語音辨識
+            step_start = time.time()
+            recognized_text = transcribe_taiwanese_audio(audio_path)
+            step_times['語音辨識'] = time.time() - step_start
+            log_step_time("台語語音辨識", step_times['語音辨識'], f"辨識結果: '{recognized_text}'")
+            
             if not recognized_text:
                 return jsonify({'error': '無法辨識台語語音內容'}), 400
             
-            # 2. LLM 對話
+            # 步驟4: LLM 對話
+            step_start = time.time()
             ai_response = chat_with_ollama(recognized_text)
+            step_times['LLM對話'] = time.time() - step_start
+            log_step_time("LLM智能對話", step_times['LLM對話'], f"AI回應: '{ai_response}'")
             
-            # 3. 台語標音轉換
+            # 步驟5: 台語標音轉換
+            step_start = time.time()
             romanization, segmented, kiatko_data = get_taiwanese_pronunciation(ai_response)
+            step_times['標音轉換'] = time.time() - step_start
+            log_step_time("台語標音轉換", step_times['標音轉換'], f"羅馬拼音: '{romanization}'")
             
-            # 4. 格式轉換（羅馬拼音轉數字調）
+            # 步驟6: 格式轉換（羅馬拼音轉數字調）
+            step_start = time.time()
             if romanization_converter:
                 numeric_tone_text = romanization_converter.convert_to_numeric_tone(romanization)
                 debug_print(f"格式轉換: '{romanization}' -> '{numeric_tone_text}'")
             else:
                 numeric_tone_text = romanization
                 debug_print(f"跳過格式轉換: '{romanization}'")
+            step_times['格式轉換'] = time.time() - step_start
+            log_step_time("羅馬拼音格式轉換", step_times['格式轉換'], f"數字調格式: '{numeric_tone_text}'")
             
-            # 5. 文字轉語音（使用自訓練遠端 TTS 服務）
-            print("\n🔊 步驟5: 台語語音合成")
-            print(f"使用 {config.get_remote_tts_display_name()}")
+            # 步驟7: 文字轉語音（使用自訓練遠端 TTS 服務）
+            step_start = time.time()
+            print(f"\n🔊 步驟7: 台語語音合成")
+            print(f"使用自訓練遠端 TTS 服務 (163.13.202.125:5000)")
             audio_file_path = None
-            if remote_tts_service and config.is_remote_tts_configured():
+            if remote_tts_service:
                 audio_file_path = remote_tts_service.generate_speech(numeric_tone_text)
             else:
-                print("⚠️ 遠端TTS服務未配置或初始化失敗，使用意傳科技TTS作為備用")
+                print("⚠️ 遠端TTS服務未初始化，使用意傳科技TTS作為備用")
                 audio_file_path = text_to_speech_ithuan(romanization, kiatko_data)
+            step_times['語音合成'] = time.time() - step_start
+            log_step_time("台語語音合成", step_times['語音合成'], f"音檔: {audio_file_path if audio_file_path else '失敗'}")
             
             if audio_file_path:
                 print(f"🔊 TTS 成功: {audio_file_path}")
             else:
                 print("⚠️ TTS 失敗")
             
-            # 6. 返回結果
-            print("\n✅ 台語語音對話處理完成")
+            # 計算總耗時
+            total_time = time.time() - total_start_time
+            
+            # 步驟8: 返回結果
+            print(f"\n✅ 台語語音對話處理完成")
+            print(f"🎯 總處理時間: {total_time:.3f}秒")
+            print("📊 各步驟耗時統計:")
+            for step_name, duration in step_times.items():
+                percentage = (duration / total_time) * 100
+                print(f"   • {step_name}: {duration:.3f}秒 ({percentage:.1f}%)")
+            
+            # 生成性能優化建議
+            optimization_suggestions = []
+            if PERFORMANCE_CONFIG_AVAILABLE:
+                optimization_suggestions = get_optimization_suggestions(step_times, total_time)
+            
             result = {
-                'recognized_text': recognized_text,
+                'success': True,
+                'transcription': recognized_text,
                 'ai_response': ai_response,
                 'romanization': romanization,
                 'numeric_tone_text': numeric_tone_text,
                 'segmented': segmented,
                 'kiatko_count': len(kiatko_data),
                 'audio_url': f'/{audio_file_path}' if audio_file_path else None,
-                'api_info': config.get_remote_tts_display_name() if remote_tts_service and config.is_remote_tts_configured() and audio_file_path else "使用意傳科技TTS作為備用"
+                'api_info': f"使用自訓練遠端 TTS 服務 (163.13.202.125:5000)" if remote_tts_service and audio_file_path else "使用意傳科技TTS作為備用",
+                'performance_stats': {
+                    'total_time': total_time,
+                    'step_times': step_times,
+                    'bottleneck': max(step_times, key=step_times.get) if step_times else None,
+                    'mode': PERFORMANCE_MODE,
+                    'suggestions': optimization_suggestions
+                }
             }
             
             debug_print("台語語音對話處理完成")
             return jsonify(result)
             
         finally:
-            # 清理本地檔案
-            if CLEANUP_FILES and os.path.exists(local_filename):
-                try:
-                    os.unlink(local_filename)
-                    debug_print(f"清理本地檔案: {local_filename}")
-                except Exception as e:
-                    debug_print(f"清理檔案失敗: {e}")
+            # 清理臨時檔案
+            try:
+                if CLEANUP_FILES:
+                    if os.path.exists(local_filename):
+                        os.unlink(local_filename)
+                        debug_print(f"清理本地檔案: {local_filename}")
+                    if audio_path != local_filename and os.path.exists(audio_path):
+                        os.unlink(audio_path)
+                        debug_print(f"清理轉換檔案: {audio_path}")
+            except Exception as e:
+                debug_print(f"清理檔案失敗: {e}")
         
     except Exception as e:
         debug_print(f"處理錯誤: {e}")
-        return jsonify({'error': f'處理失敗: {str(e)}'}), 500
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 @app.route('/test_api')
 def test_api():
@@ -784,7 +1035,7 @@ def test_api():
             'api_status': 'success' if audio_file else 'failed',
             'api_info': {
                 '標音服務': f"{ITHUAN_API['標音服務']['網域']}{ITHUAN_API['標音服務']['端點']}",
-                '遠端TTS': config.get_remote_tts_display_name() if remote_tts_service and config.is_remote_tts_configured() else "未配置"
+                '遠端TTS': "未配置" # config.get_remote_tts_display_name() if remote_tts_service and config.is_remote_tts_configured() else "未配置"
             }
         }
         
@@ -840,13 +1091,6 @@ def serve_static(filename):
     return send_file(f'static/{filename}')
 
 if __name__ == '__main__':
-    if not config.is_remote_tts_configured():
-        print("=" * 50)
-        print("⚠️ 警告：遠端TTS服務未配置！")
-        print("請創建 .env 文件並設置 REMOTE_TTS_HOST")
-        print("或直接修改 config.py 文件")
-        print("=" * 50)
-
     print("🎯 啟動台語語音對話 Web 應用程式")
     print("🌐 整合意傳科技 API（基於 TauPhahJi-BangTsam 規範）")
     print("🔧 已修復404錯誤音檔捕獲問題")
@@ -898,7 +1142,7 @@ if __name__ == '__main__':
         print("訪問 http://localhost:5000/test_api 測試 API")
         print("=" * 50)
         
-        app.run(debug=config.DEBUG_MODE, host='0.0.0.0', port=5000)
+        app.run(debug=True, host='0.0.0.0', port=5000)
     else:
         print("系統初始化失敗，無法啟動 Web 服務")
         print("請檢查模型安裝和相關依賴") 

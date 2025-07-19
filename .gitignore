@@ -1,75 +1,37 @@
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-.tox/
-.coverage
-.pytest_cache/
-*.egg-info/
+*.py[cod]
+*$py.class
 
-# Virtual environments
+# Virtual Environment
+taiwan_voice_env/
 venv/
 env/
-ENV/
+.env/
 .venv/
 
-# IDE & Editors
+# IDE
 .vscode/
 .idea/
-.project
-.pydevproject
-.settings/
-*.swp
-*.swo
 
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+# Temporary files
+*.log
+*.tmp
+temp_*.wav
+temp_*.mp3
 
-# Project specific
-static/*.wav
-static/*.mp3
-uploads/*.webm
-uploads/*.wav
-uploads/*.mp3
+# Audio files
+uploads/*
+!uploads/.gitkeep
+static/*
+!static/.gitkeep
 
-# Large binary files (users should download separately)
-ffmpeg_bin/
-
-# Build & Distribution
+# Distribution / packaging
 dist/
 build/
 *.egg-info/
-MANIFEST
 
-# Logs
-*.log
-logs/
-
-# Node.js (if any)
-node_modules/
-
-# Coverage reports
-coverage.xml
-htmlcov/
-
-# Temporary files
-*.tmp
-*.temp
-.cache/
-
-# Environment variables
+# Local development
 .env
 .env.local
-.env.*
-
-# Configuration files
-config.pyc
+*.sqlite3

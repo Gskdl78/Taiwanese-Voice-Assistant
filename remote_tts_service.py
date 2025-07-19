@@ -10,17 +10,25 @@ import time
 import requests
 import re
 from urllib.parse import urlencode
-from config import config
 
 class RemoteTtsService:
     """遠端 TTS 服務類別"""
     
-    def __init__(self):
-        self.remote_host = config.REMOTE_TTS_HOST
-        self.remote_port = config.REMOTE_TTS_PORT
-        self.base_url = config.get_remote_tts_url()
+    def __init__(self, remote_host="163.13.202.125", remote_port=5000):
+        self.remote_host = remote_host
+        self.remote_port = remote_port
+        self.base_url = f"http://{remote_host}:{remote_port}"
         self.endpoint = "/bangtsam"
-        self.timeout = 90  # 增加超時時間，因為TTS合成可能需要較長時間
+        
+        # 根據性能配置設定超時時間
+        try:
+            from performance_config import get_current_config
+            config = get_current_config()
+            self.timeout = config["tts_timeout"]
+            print(f"使用優化的TTS超時設定: {self.timeout}秒")
+        except ImportError:
+            self.timeout = 45  # 預設45秒，因為要等標音轉換
+            print(f"使用預設TTS超時設定: {self.timeout}秒")
         
     def generate_speech(self, text):
         """
@@ -32,17 +40,24 @@ class RemoteTtsService:
         Returns:
             str: 生成的音檔路徑，如果失敗則返回 None
         """
+        import time
+        
+        total_start = time.time()
         try:
-            print(f"遠端TTS請求: '{text}'")
+            print(f"⏱️  遠端TTS開始: '{text}'")
             
             # 組合API URL和參數
+            params_start = time.time()
             params = {"taibun": text}
             full_url = f"{self.base_url}{self.endpoint}"
+            params_time = time.time() - params_start
             
-            print(f"請求URL: {full_url}")
-            print(f"參數: {params}")
+            print(f"　├─ 參數準備耗時: {params_time:.3f}秒")
+            print(f"　├─ 請求URL: {full_url}")
+            print(f"　├─ 參數: {params}")
             
             # 發送請求到遠端TTS服務
+            request_start = time.time()
             response = requests.get(
                 full_url, 
                 params=params, 
@@ -53,15 +68,18 @@ class RemoteTtsService:
                     'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8'
                 }
             )
+            request_time = time.time() - request_start
+            print(f"　├─ API請求耗時: {request_time:.3f}秒")
             
-            print(f"回應狀態碼: {response.status_code}")
-            print(f"回應大小: {len(response.content)} bytes")
+            print(f"　├─ 回應狀態碼: {response.status_code}")
+            print(f"　├─ 回應大小: {len(response.content)} bytes")
             
             # 顯示回應標頭資訊，可能包含版本或其他資訊
-            print("📋 回應標頭資訊:")
+            print("　├─ 回應標頭資訊:")
             for key, value in response.headers.items():
-                print(f"   {key}: {value}")
+                print(f"　│   {key}: {value}")
             
+            process_start = time.time()
             if response.status_code == 200:
                 # 檢查回應是否為音檔格式
                 content_type = response.headers.get('content-type', '').lower()
@@ -75,25 +93,36 @@ class RemoteTtsService:
                 
                 if is_audio:
                     # 儲存音檔
+                    save_start = time.time()
                     audio_file = self._save_audio_file(response.content, text)
+                    save_time = time.time() - save_start
+                    
                     if audio_file:
-                        print(f"遠端TTS成功，音檔儲存至: {audio_file}")
+                        process_time = time.time() - process_start
+                        total_time = time.time() - total_start
+                        print(f"　├─ 音檔儲存耗時: {save_time:.3f}秒")
+                        print(f"　├─ 處理總耗時: {process_time:.3f}秒")
+                        print(f"✅ 遠端TTS成功，總耗時: {total_time:.3f}秒，音檔: {audio_file}")
                         return audio_file
                 else:
-                    print("遠端TTS回應不是音檔格式")
+                    total_time = time.time() - total_start
+                    print(f"❌ 遠端TTS回應不是音檔格式，總耗時: {total_time:.3f}秒")
                     # 嘗試顯示錯誤訊息
                     try:
                         error_text = response.content.decode('utf-8', errors='ignore')[:200]
-                        print(f"錯誤內容: {error_text}")
+                        print(f"　├─ 錯誤內容: {error_text}")
                     except:
                         pass
             else:
-                print(f"遠端TTS請求失敗，狀態碼: {response.status_code}")
+                total_time = time.time() - total_start
+                print(f"❌ 遠端TTS請求失敗，狀態碼: {response.status_code}，總耗時: {total_time:.3f}秒")
                 
         except requests.exceptions.RequestException as e:
-            print(f"遠端TTS連線錯誤: {e}")
+            total_time = time.time() - total_start
+            print(f"❌ 遠端TTS連線錯誤: {e}，總耗時: {total_time:.3f}秒")
         except Exception as e:
-            print(f"遠端TTS未知錯誤: {e}")
+            total_time = time.time() - total_start
+            print(f"❌ 遠端TTS未知錯誤: {e}，總耗時: {total_time:.3f}秒")
             
         return None
     

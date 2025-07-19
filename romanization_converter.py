@@ -37,21 +37,31 @@ class RomanizationConverter:
         Returns:
             str: 轉換後的數字調格式（如 "gua2 si7 ko3 sio2 tsoo7-tshiu2"）
         """
+        import time
+        
+        start_time = time.time()
         try:
-            print(f"轉換羅馬拼音: '{romanization_text}'")
+            print(f"⏱️  開始羅馬拼音轉換: '{romanization_text}'")
             
             # 清理輸入文字
+            clean_start = time.time()
             cleaned_text = self._clean_romanization(romanization_text)
-            print(f"清理後文字: '{cleaned_text}'")
+            clean_time = time.time() - clean_start
+            print(f"　├─ 文字清理耗時: {clean_time:.3f}秒，結果: '{cleaned_text}'")
             
             # 轉換聲調符號
+            convert_start = time.time()
             converted_text = self._convert_syllables(cleaned_text)
-            print(f"轉換結果: '{converted_text}'")
+            convert_time = time.time() - convert_start
+            total_time = time.time() - start_time
+            print(f"　├─ 聲調轉換耗時: {convert_time:.3f}秒")
+            print(f"✅ 羅馬拼音轉換完成，總耗時: {total_time:.3f}秒，結果: '{converted_text}'")
             
             return converted_text
             
         except Exception as e:
-            print(f"羅馬拼音轉換錯誤: {e}")
+            total_time = time.time() - start_time
+            print(f"❌ 羅馬拼音轉換錯誤，總耗時: {total_time:.3f}秒，錯誤: {e}")
             # 如果轉換失敗，返回原文字
             return romanization_text
     
