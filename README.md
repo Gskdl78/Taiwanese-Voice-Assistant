@@ -83,7 +83,7 @@ pip install -r requirements.txt
 ollama serve
 
 # 下載模型
-ollama pull gemma2:2b
+ollama pull gemma3:4b
 ```
 
 3. 確保 FFmpeg 在 `ffmpeg_bin/` 目錄中
