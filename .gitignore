@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+taiwan_voice_env/
+venv/
+env/
+.env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary files
+*.log
+*.tmp
+temp_*.wav
+temp_*.mp3
+
+# Audio files
+uploads/*
+!uploads/.gitkeep
+static/*
+!static/.gitkeep
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Local development
+.env
+.env.local
+*.sqlite3
+
+# Large binary files
+pytorch/
+miniconda.exe
+*.exe
+ffmpeg_bin/ffmpeg.exe
+
+# Temp files
+temp_*/
+*.temp
+*.tmp

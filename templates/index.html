@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台語語音對話系統</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Microsoft JhengHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+            text-align: center;
+        }
+
+        .title {
+            color: #333;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 300;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 1.1em;
+            margin-bottom: 40px;
+        }
+
+        .record-section {
+            margin: 40px 0;
+        }
+
+        .record-btn {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: none;
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+            font-size: 1.2em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 8px 25px rgba(255, 107, 107, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto;
+        }
+
+        .record-btn:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 35px rgba(255, 107, 107, 0.4);
+        }
+
+        .record-btn.recording {
+            background: linear-gradient(45deg, #ff4757, #c44569);
+            animation: pulse 1.5s infinite;
+        }
+
+        .record-btn.processing {
+            background: linear-gradient(45deg, #ffa502, #ff6348);
+            cursor: not-allowed;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 1.1em;
+            min-height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .status.idle {
+            background: #f8f9fa;
+            color: #6c757d;
+        }
+
+        .status.recording {
+            background: #ffe6e6;
+            color: #ff4757;
+        }
+
+        .status.processing {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .conversation {
+            margin-top: 30px;
+            text-align: left;
+        }
+
+        .message {
+            margin: 15px 0;
+            padding: 15px;
+            border-radius: 15px;
+            max-width: 80%;
+        }
+
+        .user-message {
+            background: #007bff;
+            color: white;
+            margin-left: auto;
+            border-bottom-right-radius: 5px;
+        }
+
+        .ai-message {
+            background: #f1f3f4;
+            color: #333;
+            margin-right: auto;
+            border-bottom-left-radius: 5px;
+            position: relative;
+        }
+
+        .play-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9em;
+            margin-left: 10px;
+            transition: background 0.3s ease;
+        }
+
+        .play-btn:hover {
+            background: #218838;
+        }
+
+        .play-btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+
+        .tech-info {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            font-size: 0.9em;
+            color: #6c757d;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #007bff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .emoji {
+            font-size: 1.2em;
+            margin-right: 5px;
+        }
+
+        /* 性能統計樣式 */
+        .performance-stats {
+            margin: 15px 0;
+            padding: 12px;
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 0.85em;
+            transition: opacity 0.3s ease;
+        }
+
+        .stats-header {
+            font-weight: bold;
+            color: #495057;
+            margin-bottom: 8px;
+            border-bottom: 1px solid #dee2e6;
+            padding-bottom: 4px;
+        }
+
+        .stats-content {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+
+        .stats-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 2px 4px;
+            border-radius: 4px;
+        }
+
+        .stats-item.bottleneck {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+        }
+
+        .step-name {
+            color: #6c757d;
+            font-weight: 500;
+        }
+
+        .step-time {
+            color: #495057;
+            font-family: monospace;
+        }
+
+        .bottleneck-badge {
+            background: #fd7e14;
+            color: white;
+            font-size: 0.7em;
+            padding: 1px 6px;
+            border-radius: 10px;
+            margin-left: 8px;
+        }
+
+        .mode-badge {
+            background: #007bff;
+            color: white;
+            font-size: 0.7em;
+            padding: 2px 8px;
+            border-radius: 12px;
+            margin-left: 10px;
+            font-weight: normal;
+        }
+
+        /* 優化建議樣式 */
+        .optimization-suggestions {
+            margin-top: 12px;
+            padding-top: 8px;
+            border-top: 1px solid #dee2e6;
+        }
+
+        .suggestions-header {
+            font-weight: bold;
+            color: #28a745;
+            margin-bottom: 8px;
+            font-size: 0.9em;
+        }
+
+        .suggestion-item {
+            margin-bottom: 10px;
+            padding: 8px;
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 6px;
+        }
+
+        .suggestion-message {
+            font-weight: 500;
+            color: #856404;
+            margin-bottom: 4px;
+        }
+
+        .suggestion-solutions {
+            font-size: 0.85em;
+            color: #6c757d;
+        }
+
+        .suggestion-solutions ul {
+            margin: 4px 0 0 16px;
+            padding: 0;
+        }
+
+        .suggestion-solutions li {
+            margin: 2px 0;
+            color: #495057;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="title">🎙️ 台語語音對話</h1>
+        <p class="subtitle">按下按鈕開始錄音，與 AI 進行台語對話</p>
+
+        <div class="record-section">
+            <button id="recordBtn" class="record-btn">
+                <span id="recordText">🎤 錄音</span>
+            </button>
+        </div>
+
+        <div id="status" class="status idle">
+            <span class="emoji">💬</span>點擊麥克風按鈕開始對話
+        </div>
+
+        <div id="conversation" class="conversation"></div>
+
+        <div class="tech-info">
+            <strong>🔧 技術架構</strong><br>
+            語音辨識：NUTN-KWS 台語專門模型 | 
+            語言模型：Ollama LLM | 
+            語音合成：台語 TTS API
+        </div>
+    </div>
+
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+
+        const recordBtn = document.getElementById('recordBtn');
+        const recordText = document.getElementById('recordText');
+        const status = document.getElementById('status');
+        const conversation = document.getElementById('conversation');
+
+        // 更新狀態顯示
+        function updateStatus(message, type = 'idle') {
+            status.className = `status ${type}`;
+            status.innerHTML = getStatusIcon(type) + message;
+        }
+
+        function getStatusIcon(type) {
+            const icons = {
+                idle: '<span class="emoji">💬</span>',
+                recording: '<span class="emoji">🎤</span>',
+                processing: '<div class="loading"></div>',
+                success: '<span class="emoji">✅</span>',
+                error: '<span class="emoji">❌</span>'
+            };
+            return icons[type] || icons.idle;
+        }
+
+        // 添加對話訊息
+        function addMessage(text, isUser = false, audioUrl = null) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user-message' : 'ai-message'}`;
+            
+            let messageContent = text;
+            if (!isUser && audioUrl) {
+                messageContent += `<button class="play-btn" onclick="playAudio('${audioUrl}')">🔊 播放</button>`;
+            }
+            
+            messageDiv.innerHTML = messageContent;
+            conversation.appendChild(messageDiv);
+            conversation.scrollTop = conversation.scrollHeight;
+        }
+
+        // 播放音檔
+        function playAudio(audioUrl) {
+            const audio = new Audio(audioUrl);
+            audio.play().catch(e => {
+                console.error('播放失敗:', e);
+                updateStatus('音檔播放失敗', 'error');
+            });
+        }
+
+        // 顯示性能統計
+        function showPerformanceStats(stats) {
+            const conversation = document.getElementById('conversation');
+            const statsDiv = document.createElement('div');
+            statsDiv.className = 'performance-stats';
+            
+            let statsHtml = `
+                <div class="stats-header">
+                    <span class="emoji">📊</span>處理性能統計 (總時間: ${stats.total_time.toFixed(3)}秒)
+                    ${stats.mode ? `<span class="mode-badge">${stats.mode.toUpperCase()}模式</span>` : ''}
+                </div>
+                <div class="stats-content">
+            `;
+            
+            // 排序步驟按時間長短
+            const sortedSteps = Object.entries(stats.step_times)
+                .sort(([,a], [,b]) => b - a);
+            
+            for (const [stepName, duration] of sortedSteps) {
+                const percentage = ((duration / stats.total_time) * 100).toFixed(1);
+                const isBottleneck = stepName === stats.bottleneck;
+                statsHtml += `
+                    <div class="stats-item ${isBottleneck ? 'bottleneck' : ''}">
+                        <span class="step-name">${stepName}:</span>
+                        <span class="step-time">${duration.toFixed(3)}秒 (${percentage}%)</span>
+                        ${isBottleneck ? '<span class="bottleneck-badge">瓶頸</span>' : ''}
+                    </div>
+                `;
+            }
+            
+            statsHtml += '</div>';
+            
+            // 添加優化建議
+            if (stats.suggestions && stats.suggestions.length > 0) {
+                statsHtml += '<div class="optimization-suggestions">';
+                statsHtml += '<div class="suggestions-header">🚀 性能優化建議</div>';
+                
+                for (const suggestion of stats.suggestions) {
+                    if (suggestion.type === 'optimization') {
+                        statsHtml += `
+                            <div class="suggestion-item">
+                                <div class="suggestion-message">⚠️ ${suggestion.message}</div>
+                                <div class="suggestion-solutions">
+                                    解決方案：
+                                    <ul>
+                                        ${suggestion.solutions.map(sol => `<li>${sol}</li>`).join('')}
+                                    </ul>
+                                </div>
+                            </div>
+                        `;
+                    }
+                }
+                
+                statsHtml += '</div>';
+            }
+            
+            statsDiv.innerHTML = statsHtml;
+            
+            conversation.appendChild(statsDiv);
+            conversation.scrollTop = conversation.scrollHeight;
+            
+            // 8秒後淡出（因為有更多內容）
+            setTimeout(() => {
+                statsDiv.style.opacity = '0.5';
+            }, 8000);
+        }
+
+        // 初始化錄音
+        async function initRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: 16000
+                    }
+                });
+                
+                // 嘗試使用支援的音訊格式，優先選擇容易處理的格式
+                let options = {};
+                if (MediaRecorder.isTypeSupported('audio/wav')) {
+                    options.mimeType = 'audio/wav';
+                    console.log('使用 WAV 格式');
+                } else if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+                    options.mimeType = 'audio/webm;codecs=opus';
+                    console.log('使用 WebM/Opus 格式');
+                } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+                    options.mimeType = 'audio/webm';
+                    console.log('使用 WebM 格式');
+                } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+                    options.mimeType = 'audio/mp4';
+                    console.log('使用 MP4 格式');
+                } else {
+                    console.log('使用預設音檔格式');
+                }
+                
+                mediaRecorder = new MediaRecorder(stream, options);
+                console.log('使用音檔格式:', mediaRecorder.mimeType);
+                
+                mediaRecorder.ondataavailable = event => {
+                    audioChunks.push(event.data);
+                };
+                
+                mediaRecorder.onstop = async () => {
+                    // 使用實際的 MIME 類型
+                    const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+                    audioChunks = [];
+                    await processAudio(audioBlob);
+                };
+
+                return true;
+                
+            } catch (error) {
+                console.error('麥克風權限錯誤:', error);
+                updateStatus('無法取得麥克風權限', 'error');
+                return false;
+            }
+        }
+
+        // 錄音計時器
+        let recordingTimer = null;
+        let recordingStartTime = null;
+
+        // 處理錄音按鈕點擊
+        recordBtn.addEventListener('click', async () => {
+            if (!isRecording) {
+                // 開始錄音
+                if (!mediaRecorder) {
+                    const success = await initRecording();
+                    if (!success) return;
+                }
+                
+                audioChunks = [];
+                mediaRecorder.start();
+                isRecording = true;
+                recordingStartTime = Date.now();
+
+                recordBtn.className = 'record-btn recording';
+                recordText.textContent = '🔴 錄音中';
+                updateStatus('正在錄音，再次點擊停止（建議錄音1-5秒）', 'recording');
+
+                // 設定最大錄音時間（10秒）
+                recordingTimer = setTimeout(() => {
+                    if (isRecording) {
+                        recordBtn.click(); // 自動停止
+                        updateStatus('錄音已自動停止（超過10秒）', 'processing');
+                    }
+                }, 10000);
+
+            } else {
+                // 停止錄音
+                if (recordingTimer) {
+                    clearTimeout(recordingTimer);
+                    recordingTimer = null;
+                }
+
+                // 檢查錄音時長
+                const recordingDuration = (Date.now() - recordingStartTime) / 1000;
+                console.log(`錄音時長: ${recordingDuration.toFixed(2)} 秒`);
+
+                if (recordingDuration < 0.5) {
+                    updateStatus('錄音太短，請重新錄音（至少0.5秒）', 'error');
+                    isRecording = false;
+                    recordBtn.className = 'record-btn';
+                    recordText.textContent = '🎤 錄音';
+                    return;
+                }
+
+                mediaRecorder.stop();
+                isRecording = false;
+
+                recordBtn.className = 'record-btn processing';
+                recordText.textContent = '⏳ 處理中';
+                updateStatus(`處理 ${recordingDuration.toFixed(1)} 秒錄音中，請稍候...`, 'processing');
+            }
+        });
+
+        // 處理音檔
+        async function processAudio(audioBlob) {
+            try {
+                const formData = new FormData();
+                formData.append('audio', audioBlob, 'recording.wav');
+                
+                const response = await fetch('/process_audio', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    // 顯示辨識結果
+                    addMessage(result.transcription, true);
+                    
+                    // 顯示 AI 回應
+                    addMessage(result.ai_response, false, result.audio_url);
+                    
+                    // 顯示性能統計
+                    if (result.performance_stats) {
+                        showPerformanceStats(result.performance_stats);
+                    }
+                    
+                    updateStatus('對話完成！可以繼續錄音', 'success');
+                    
+                    // 自動播放 AI 回應
+                    if (result.audio_url) {
+                        setTimeout(() => playAudio(result.audio_url), 500);
+                    }
+                } else {
+                    updateStatus(`錯誤: ${result.error}`, 'error');
+                }
+
+            } catch (error) {
+                console.error('處理錯誤:', error);
+                updateStatus('處理失敗，請重試', 'error');
+            } finally {
+                // 重置按鈕
+                recordBtn.className = 'record-btn';
+                recordText.textContent = '🎤 錄音';
+            }
+        }
+
+        // 頁面載入時的歡迎訊息
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                updateStatus('系統已準備好，點擊麥克風開始對話！', 'success');
+            }, 1000);
+        });
+    </script>
+</body>
+</html> 
