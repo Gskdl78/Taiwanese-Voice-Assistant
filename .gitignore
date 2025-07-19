@@ -35,3 +35,14 @@ build/
 .env
 .env.local
 *.sqlite3
+
+# Large binary files
+pytorch/
+miniconda.exe
+*.exe
+ffmpeg_bin/ffmpeg.exe
+
+# Temp files
+temp_*/
+*.temp
+*.tmp
