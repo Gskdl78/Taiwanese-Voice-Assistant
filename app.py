@@ -234,26 +234,12 @@ ITHUAN_API = {
         "端點": "/tau",
         "方法": "POST",
         "內容類型": "application/x-www-form-urlencoded"
-    },
-    "整段語音合成": {
-        "網域": "https://hokbu.ithuan.tw",
-        "端點": "/bangtsam",
-        "方法": "GET",
-        "內容類型": "application/x-www-form-urlencoded"
-    },
-    "單詞語音合成": {
-        "網域": "https://hokbu.ithuan.tw",
-        "端點": "/huan",
-        "方法": "GET",
-        "內容類型": "application/x-www-form-urlencoded"
     }
 }
 
 # API使用限制
 API_LIMITS = {
-    "每分鐘下載限制": 3,  # 每IP每分鐘最多3次音檔下載
-    "文字長度限制": 200,   # 建議單次查詢不超過200字
-    "避免同時請求": True    # 避免同時發送多個請求
+    "文字長度限制": 200   # 建議單次查詢不超過200字
 }
 
 def find_ffmpeg():
