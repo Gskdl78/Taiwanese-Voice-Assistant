@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台語字母卡</title>
+    <style>
+        /* --- 沿用 index.html 的大部分樣式 --- */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Microsoft JhengHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+            text-align: center;
+        }
+        .title { color: #333; font-size: 2.5em; margin-bottom: 10px; font-weight: 300; }
+        .subtitle { color: #666; font-size: 1.1em; margin-bottom: 30px; }
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 1.1em;
+            min-height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+        }
+        .status.idle { background: #f8f9fa; color: #6c757d; }
+        .status.processing { background: #fff3cd; color: #856404; }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .loading {
+            display: inline-block; width: 20px; height: 20px;
+            border: 3px solid #f3f3f3; border-top: 3px solid #007bff;
+            border-radius: 50%; animation: spin 1s linear infinite; margin-right: 10px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* --- 新增 & 修改的樣式 --- */
+        .nav {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        .nav-btn {
+            padding: 10px 20px;
+            border: 1px solid #764ba2;
+            background: transparent;
+            color: #764ba2;
+            border-radius: 25px;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            font-size: 1em;
+        }
+        .nav-btn.active {
+            background: #764ba2;
+            color: white;
+        }
+        .nav-btn:hover {
+            background: #6a429b;
+            color: white;
+        }
+
+        .input-section { display: flex; gap: 10px; margin-bottom: 30px; }
+        #text-input {
+            flex-grow: 1;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            font-size: 1.1em;
+        }
+        #generate-btn {
+            padding: 0 25px;
+            border: none;
+            background: linear-gradient(45deg, #28a745, #218838);
+            color: white;
+            border-radius: 10px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        #generate-btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(40, 167, 69, 0.3); }
+        #generate-btn:disabled { background: #6c757d; cursor: not-allowed; }
+
+        .flashcard-container {
+            perspective: 1000px;
+            min-height: 250px;
+        }
+        .flashcard {
+            width: 100%;
+            height: 250px;
+            position: relative;
+            transform-style: preserve-3d;
+            transition: transform 0.8s;
+            cursor: pointer;
+        }
+        .flashcard.flipped { transform: rotateY(180deg); }
+        .card-face {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            backface-visibility: hidden;
+            border-radius: 15px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            font-size: 2.5em;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+        }
+        .card-front {
+            background: #f8f9fa;
+            color: #333;
+        }
+        .card-back {
+            background: #e9ecef;
+            color: #495057;
+            transform: rotateY(180deg);
+        }
+        .card-placeholder { font-size: 1.2em; color: #aaa; }
+
+        .controls-section {
+            margin-top: 25px;
+            height: 50px; /* 預留空間防止佈局跳動 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .play-speech-btn {
+            padding: 12px 25px;
+            border: none;
+            background: linear-gradient(45deg, #007bff, #0056b3);
+            color: white;
+            border-radius: 10px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(10px);
+        }
+        .play-speech-btn.visible {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+        .play-speech-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 123, 255, 0.3);
+        }
+        .play-speech-btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav class="nav">
+            <a href="/" class="nav-btn">語音助手</a>
+            <a href="/flashcard" class="nav-btn active">字母卡</a>
+        </nav>
+        <h1 class="title">台語字母卡</h1>
+        <p class="subtitle">輸入中文，產生可點擊發音的台羅拼音卡</p>
+
+        <div class="input-section">
+            <input type="text" id="text-input" placeholder="請在這裡輸入中文...">
+            <button id="generate-btn">產生</button>
+        </div>
+
+        <div id="status" class="status idle">請輸入文字並點擊產生</div>
+
+        <div class="flashcard-container">
+            <div class="flashcard" id="flashcard">
+                <div class="card-face card-front">
+                    <span id="card-front-text" class="card-placeholder">中文</span>
+                </div>
+                <div class="card-face card-back">
+                    <span id="card-back-text" class="card-placeholder">羅馬拼音</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls-section">
+            <button id="play-speech-btn" class="play-speech-btn" disabled>🔊 播放發音</button>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const textInput = document.getElementById('text-input');
+            const generateBtn = document.getElementById('generate-btn');
+            const statusDiv = document.getElementById('status');
+            const flashcard = document.getElementById('flashcard');
+            const cardFrontText = document.getElementById('card-front-text');
+            const cardBackText = document.getElementById('card-back-text');
+            const playSpeechBtn = document.getElementById('play-speech-btn');
+
+            let audio = null;
+            let currentAudioUrl = '';
+
+            // 卡片翻轉
+            flashcard.addEventListener('click', (e) => {
+                if (e.target.id !== 'play-speech-btn') {
+                    flashcard.classList.toggle('flipped');
+                }
+            });
+
+            // 播放語音
+            playSpeechBtn.addEventListener('click', () => {
+                if (currentAudioUrl) {
+                    if (audio && !audio.paused) {
+                        audio.pause();
+                        audio.currentTime = 0;
+                    }
+                    audio = new Audio(currentAudioUrl);
+                    audio.play();
+                }
+            });
+            
+            // 產生卡片
+            generateBtn.addEventListener('click', async () => {
+                const text = textInput.value.trim();
+                if (!text) {
+                    setStatus('請輸入有效的中文文字', 'error');
+                    return;
+                }
+
+                setStatus('處理中... <span class="loading"></span>', 'processing');
+                generateBtn.disabled = true;
+
+                try {
+                    const response = await fetch('/generate_flashcard', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: text })
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.error || '後端處理失敗');
+                    }
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        updateCard(data.original_text, data.romanization);
+                        currentAudioUrl = data.audio_url;
+                        playSpeechBtn.disabled = !data.audio_url;
+                        if(data.audio_url) {
+                            playSpeechBtn.classList.add('visible');
+                        } else {
+                            playSpeechBtn.classList.remove('visible');
+                        }
+                        setStatus(`成功產生卡片！點擊卡片可翻轉。`, 'success');
+                    } else {
+                        throw new Error(data.error || '產生卡片失敗');
+                    }
+
+                } catch (error) {
+                    setStatus(`錯誤: ${error.message}`, 'error');
+                    resetCard();
+                } finally {
+                    generateBtn.disabled = false;
+                }
+            });
+
+            function setStatus(message, type) {
+                statusDiv.innerHTML = message;
+                statusDiv.className = `status ${type}`;
+            }
+            
+            function updateCard(front, back) {
+                cardFrontText.textContent = front;
+                cardFrontText.classList.remove('card-placeholder');
+                cardBackText.textContent = back;
+                cardBackText.classList.remove('card-placeholder');
+                if (flashcard.classList.contains('flipped')) {
+                    flashcard.classList.remove('flipped');
+                }
+            }
+
+            function resetCard() {
+                cardFrontText.textContent = '中文';
+                cardFrontText.classList.add('card-placeholder');
+                cardBackText.textContent = '羅馬拼音';
+                cardBackText.classList.add('card-placeholder');
+                playSpeechBtn.disabled = true;
+                playSpeechBtn.classList.remove('visible');
+                currentAudioUrl = '';
+                if (flashcard.classList.contains('flipped')) {
+                    flashcard.classList.remove('flipped');
+                }
+            }
+        });
+    </script>
+</body>
+</html> 
