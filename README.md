@@ -71,9 +71,9 @@ graph TD
   ```
 - **安裝 Ollama**：
   - 前往 [Ollama 官網](https://ollama.com/download) 下載並安裝適合您作業系統的版本。
-  - 安裝後，打開終端機執行以下指令來下載一個對話模型（以 `gemma2` 為例）：
+  - 安裝後，打開終端機執行以下指令來下載一個對話模型（以 `gemma3:4b` 為例）：
     ```bash
-    ollama pull gemma2:2b
+    ollama pull gemma3:4b
     ```
 
 ### 3. 設定虛擬環境 (非常重要！)
