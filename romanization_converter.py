@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 羅馬拼音格式轉換器
-將意傳科技API的羅馬拼音轉換為數字調格式
+將多種格式的台語羅馬拼音（包含聲調符號）轉換為數字調格式。
+支援聲母 o͘ 和輕聲 (--)。
 """
 
 import re
@@ -12,30 +13,27 @@ class RomanizationConverter:
     """羅馬拼音格式轉換器"""
     
     def __init__(self):
-        # 台語聲調符號對數字的映射
-        self.tone_marks = {
-            # 第1聲 (陰平) - 通常不標調
-            # 第2聲 (陰上) - 銳音符 ́
-            'á': '2', 'é': '2', 'í': '2', 'ó': '2', 'ú': '2', 'ń': '2', 'ḿ': '2',
-            # 第3聲 (陰去) - 重音符 ̀
-            'à': '3', 'è': '3', 'ì': '3', 'ò': '3', 'ù': '3', 'ǹ': '3', 'm̀': '3',
-            # 第5聲 (陽平) - 抑揚符 ̂
-            'â': '5', 'ê': '5', 'î': '5', 'ô': '5', 'û': '5', 'n̂': '5', 'm̂': '5',
-            # 第7聲 (陽去) - 長音符 ̄
-            'ā': '7', 'ē': '7', 'ī': '7', 'ō': '7', 'ū': '7', 'n̄': '7', 'm̄': '7',
-            # 第8聲 (陽入) - 點下方 ̍
-            'a̍': '8', 'e̍': '8', 'i̍': '8', 'o̍': '8', 'u̍': '8', 'n̍': '8', 'm̍': '8',
+        """初始化聲調映射表"""
+        # Unicode 組合聲調符號 -> 數字調
+        self.tone_map = {
+            '\u0301': '2',  # Combining Acute Accent (ˊ)
+            '\u0300': '3',  # Combining Grave Accent (ˋ)
+            '\u0302': '5',  # Combining Circumflex Accent (ˆ)
+            '\u0304': '7',  # Combining Macron (ˉ)
+            '\u030d': '8',  # Combining Vertical Line Above (̍)
         }
-        
+        # o͘ 的組合點符號
+        self.o_dot_char = '\u0358'  # Combining Dot Above Right
+
     def convert_to_numeric_tone(self, romanization_text):
         """
         將羅馬拼音轉換為數字調格式
         
         Args:
-            romanization_text (str): 輸入的羅馬拼音文字（如 "guá sī kò sió tsōo-tshiú"）
+            romanization_text (str): 輸入的羅馬拼音文字（如 "guá sī o͘-á"）
             
         Returns:
-            str: 轉換後的數字調格式（如 "gua2 si7 ko3 sio2 tsoo7-tshiu2"）
+            str: 轉換後的數字調格式（如 "gua2 si7 oo-a2"）
         """
         import time
         
@@ -43,13 +41,11 @@ class RomanizationConverter:
         try:
             print(f"⏱️  開始羅馬拼音轉換: '{romanization_text}'")
             
-            # 清理輸入文字
             clean_start = time.time()
             cleaned_text = self._clean_romanization(romanization_text)
             clean_time = time.time() - clean_start
             print(f"　├─ 文字清理耗時: {clean_time:.3f}秒，結果: '{cleaned_text}'")
             
-            # 轉換聲調符號
             convert_start = time.time()
             converted_text = self._convert_syllables(cleaned_text)
             convert_time = time.time() - convert_start
@@ -62,88 +58,88 @@ class RomanizationConverter:
         except Exception as e:
             total_time = time.time() - start_time
             print(f"❌ 羅馬拼音轉換錯誤，總耗時: {total_time:.3f}秒，錯誤: {e}")
-            # 如果轉換失敗，返回原文字
             return romanization_text
     
     def _clean_romanization(self, text):
-        """清理羅馬拼音文字"""
-        # 移除多餘的空格和標點符號
-        text = re.sub(r'[，。！？；：]', '', text)
+        """清理羅馬拼音文字，移除不必要的標點符號"""
+        text = re.sub(r'[，。！？；：,.?!;:]', '', text)
         text = re.sub(r'\s+', ' ', text)
         return text.strip()
     
     def _convert_syllables(self, text):
         """將文字分割成音節並逐個轉換"""
-        # 分割成音節（以空格和連字符分割）
         parts = re.split(r'(\s+|-)', text)
-        converted_parts = []
-        
-        for part in parts:
-            if re.match(r'^\s+$', part) or part == '-':
-                # 保留空格和連字符
-                converted_parts.append(part)
-            else:
-                # 轉換音節
-                converted_syllable = self._convert_single_syllable(part)
-                converted_parts.append(converted_syllable)
-        
+        converted_parts = [self._convert_single_syllable(part) for part in parts]
         return ''.join(converted_parts)
     
     def _convert_single_syllable(self, syllable):
-        """轉換單個音節"""
-        if not syllable:
+        """
+        轉換單個音節的核心邏輯
+        包含聲調、o͘ 和輕聲處理
+        """
+        if not syllable or re.match(r'^\s+$', syllable) or syllable == '-' or re.search(r'\d$', syllable):
             return syllable
-            
-        # 檢查是否已經包含數字（已經是數字調格式）
-        if re.search(r'\d', syllable):
-            return syllable
-            
-        # 尋找聲調符號 - 需要檢查完整的組合字符
-        tone_found = False
-        result = syllable
+
+        # 1. 處理輕聲 (neutral tone)
+        is_neutral_tone = False
+        if syllable.startswith('--'):
+            is_neutral_tone = True
+            syllable = syllable[2:]
+
+        # 2. 使用 NFD 正規化，分解為基礎字符和組合符號
+        decomposed = unicodedata.normalize('NFD', syllable)
         
-        # 檢查是否包含聲調符號（使用字符串匹配而不是單個字符）
-        for tone_char, tone_num in self.tone_marks.items():
-            if tone_char in syllable:
-                # 移除聲調符號，加上數字
-                base_char = self._remove_tone_mark(tone_char)
-                result = result.replace(tone_char, base_char)
-                result = result + tone_num
-                tone_found = True
-                break
-        
-        # 如果沒有找到聲調符號，判斷是否需要加上預設聲調
-        if not tone_found:
-            # 檢查是否為入聲字（以 h, t, k, p 結尾）
-            if syllable.endswith(('h', 't', 'k', 'p')):
-                # 入聲字通常是第4聲或第8聲，這裡預設第4聲
-                result = syllable + '4'
-            elif syllable and any(c in syllable for c in 'aeiou'):
-                # 有母音但無聲調符號，預設第1聲
-                result = syllable + '1'
+        base_chars = []
+        tone_char = None
+
+        for char in decomposed:
+            if unicodedata.combining(char):
+                if char in self.tone_map and not tone_char:
+                    tone_char = char
+                else:
+                    # 保留其他組合符號，例如 o͘ 的點
+                    base_chars.append(char)
             else:
-                # 其他情況保持原樣
-                result = syllable
+                base_chars.append(char)
         
-        return result
-    
-    def _remove_tone_mark(self, char):
-        """移除聲調符號，返回基本字符"""
-        # 使用 Unicode 正規化來移除聲調符號
-        normalized = unicodedata.normalize('NFD', char)
-        base_char = ''.join(c for c in normalized if not unicodedata.combining(c))
-        return base_char
+        # 3. 重建基礎音節，並處理特殊母音 o͘
+        # 將 'o' + 'combining dot' 替換為 'oo'
+        base_syllable = "".join(base_chars).replace(f'o{self.o_dot_char}', 'oo')
+
+        # 4. 決定聲調數字
+        tone_number = ""
+        if is_neutral_tone:
+            tone_number = '0'
+        elif tone_char:
+            tone_number = self.tone_map[tone_char]
+        else:
+            # 預設聲調規則 (入聲字 vs. 一般字)
+            if base_syllable.lower().endswith(('p', 't', 'k', 'h')):
+                tone_number = '4'
+            elif any(c in 'aeiou' for c in base_syllable.lower()):
+                tone_number = '1'
+
+        return base_syllable + tone_number
     
     def test_conversion(self):
-        """測試轉換功能"""
+        """擴充後的測試案例"""
         test_cases = [
-            "guá sī kò sió tsōo-tshiú",
-            "lí hó",
-            "tsia̍h-pn̄g",
-            "kám-siā"
+            "guá sī Tâi-oân-lâng",   # 基本聲調
+            "lí hó",                  # 基本聲調
+            "tsia̍h-pn̄g",             # 第8聲和第7聲
+            "kám-siā",               # 第2聲和第1聲
+            "o͘-á-kah",               # 關鍵的 o͘ 處理
+            "tsòe-kang",             # o͘e 的組合 (實際是 tsuè)
+            "goe̍h-niû",              # e̍h 的組合
+            "--lah",                 # 輕聲處理
+            "tsit-ê --lâng chin-kán-tan", # 句子中的輕聲
+            "thak-tsheh",            # 入聲字 (p,t,k,h結尾)
+            "sió-bōo",               # 第3聲
+            "sann",                  # 單音節
+            "Tâi-lô"                 # 已經是數字調(此處應為羅馬字)
         ]
         
-        print("=== 羅馬拼音轉換測試 ===")
+        print("\n=== 羅馬拼音轉換器升級版測試 ===")
         for test_text in test_cases:
             result = self.convert_to_numeric_tone(test_text)
             print(f"輸入: {test_text}")
