@@ -46,3 +46,14 @@ ffmpeg_bin/ffmpeg.exe
 temp_*/
 *.temp
 *.tmp
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+# 自訂忽略
+/ffmpeg_bin/
+/taiwan_voice_env/
+/miniconda.exe
+/ffmpeg_bin/ffmpeg.exe
