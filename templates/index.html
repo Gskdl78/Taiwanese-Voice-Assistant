@@ -21,6 +21,31 @@
             padding: 20px;
         }
 
+        .nav {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        .nav-btn {
+            padding: 10px 20px;
+            border: 1px solid #764ba2;
+            background: transparent;
+            color: #764ba2;
+            border-radius: 25px;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            font-size: 1em;
+        }
+        .nav-btn.active {
+            background: #764ba2;
+            color: white;
+        }
+        .nav-btn:hover {
+            background: #6a429b;
+            color: white;
+        }
+
         .container {
             background: white;
             border-radius: 20px;
@@ -313,6 +338,10 @@
 </head>
 <body>
     <div class="container">
+        <nav class="nav">
+            <a href="/" class="nav-btn active">語音助手</a>
+            <a href="/flashcard" class="nav-btn">字母卡</a>
+        </nav>
         <h1 class="title">🎙️ 台語語音對話</h1>
         <p class="subtitle">按下按鈕開始錄音，與 AI 進行台語對話</p>
 

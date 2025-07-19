@@ -21,6 +21,7 @@ import torchaudio.transforms as T
 from transformers import WhisperProcessor, WhisperForConditionalGeneration, pipeline
 import requests
 from urllib.parse import urlencode, quote
+import glob
 
 # 匯入新的TTS服務和格式轉換器
 from remote_tts_service import RemoteTtsService
@@ -71,6 +72,38 @@ def performance_timer(func_name):
                 
         return wrapper
     return decorator
+
+def cleanup_temp_files():
+    """清理 static 和 uploads 目錄中的臨時音檔"""
+    print("🧹 開始清理臨時音檔...")
+    deleted_count = 0
+    errors = 0
+    
+    # 定義要清理的資料夾和檔案類型
+    folders_to_clean = ["static", "uploads"]
+    file_extensions = ["*.wav", "*.webm"]
+    
+    for folder in folders_to_clean:
+        if not os.path.isdir(folder):
+            print(f"⚠️ 目錄不存在，跳過清理: {folder}")
+            continue
+            
+        for ext in file_extensions:
+            # 組合搜尋路徑
+            search_path = os.path.join(folder, ext)
+            # 尋找所有匹配的檔案
+            files_to_delete = glob.glob(search_path)
+            
+            for f in files_to_delete:
+                try:
+                    os.remove(f)
+                    # print(f"  - 已刪除: {f}")
+                    deleted_count += 1
+                except OSError as e:
+                    print(f"❌ 刪除失敗: {f} - 錯誤: {e}")
+                    errors += 1
+                    
+    print(f"✅ 清理完成: 共刪除 {deleted_count} 個檔案，發生 {errors} 個錯誤。")
 
 def log_step_time(step_name, duration, details=""):
     """記錄步驟執行時間"""
@@ -531,194 +564,11 @@ def get_taiwanese_pronunciation(text):
         debug_print(f"標音 API 失敗: {e}")
         return text, text, []
 
-def text_to_speech_ithuan_full_sentence(腔口, 分詞):
-    """整段語音合成（按照 TauPhahJi-BangTsam 規範）"""
-    try:
-        print(f"🔊 整段語音合成: 腔口='{腔口}', 分詞='{分詞}'")
-        
-        # 根據文檔規範構建API請求
-        api_config = ITHUAN_API["整段語音合成"]
-        base_url = f"{api_config['網域']}{api_config['端點']}"
-        
-        # GET 請求參數
-        params = {
-            '查詢腔口': 腔口,
-            '查詢語句': 分詞
-        }
-        
-        print(f"   📡 API 端點: {base_url}")
-        print(f"   📤 請求參數: {params}")
-        print(f"   🔧 請求方法: {api_config['方法']}")
-        
-        # 手動構建 URL 以確保正確編碼（按照文檔範例）
-        encoded_params = urlencode(params, safe='', encoding='utf-8')
-        full_url = f"{base_url}?{encoded_params}"
-        print(f"   🌐 完整URL: {full_url}")
-        
-        # 發送 GET 請求
-        response = requests.get(
-            full_url,
-            timeout=30,
-            headers={
-                'User-Agent': 'TaiwaneseVoiceChat/1.0',
-                'Accept': 'audio/wav, audio/*, */*',
-                'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8'
-            }
-        )
-        
-        print(f"   📥 回應狀態: {response.status_code}")
-        print(f"   📋 Content-Type: {response.headers.get('content-type', 'unknown')}")
-        print(f"   📏 回應大小: {len(response.content)} bytes")
-        
-        # 不管狀態碼如何，都檢查是否有音檔數據
-        if len(response.content) > 100:
-            content_type = response.headers.get('content-type', '').lower()
-            print(f"   🔍 檢查音檔內容: 大小={len(response.content)}, type='{content_type}'")
-            
-            # 檢查是否為音訊內容（更寬鬆的判斷）
-            is_audio = (
-                'audio' in content_type or 
-                len(response.content) > 1000 or
-                response.content.startswith(b'RIFF') or  # WAV檔案標頭
-                response.content.startswith(b'ID3') or   # MP3檔案標頭
-                response.content.startswith(b'\xff\xfb') # MP3檔案標頭變種
-            )
-            
-            if is_audio:
-                # 儲存音檔（即使是404也嘗試保存）
-                timestamp = int(time.time())
-                output_file = f"static/tts_full_{timestamp}.wav"
-                
-                # 確保 static 目錄存在
-                os.makedirs("static", exist_ok=True)
-                
-                with open(output_file, 'wb') as f:
-                    f.write(response.content)
-                
-                print(f"   ✅ 發現音檔數據並保存: {output_file} (狀態碼: {response.status_code})")
-                return output_file
-            else:
-                print(f"   ⚠️ 回應不像音訊格式")
-                # 如果是文字回應，顯示內容
-                if response.content:
-                    try:
-                        text_content = response.content.decode('utf-8', errors='ignore')[:200]
-                        print(f"   📋 文字回應: {text_content}")
-                    except:
-                        print(f"   📋 二進位回應: {response.content[:50]}")
-        else:
-            print(f"   ⚠️ 回應太小（{len(response.content)} bytes），可能不是音檔")
-            if response.content:
-                try:
-                    text_content = response.content.decode('utf-8', errors='ignore')[:200]
-                    print(f"   📋 小回應內容: {text_content}")
-                except:
-                    print(f"   📋 小回應二進位: {response.content}")
-        
-        return None
-        
-    except Exception as e:
-        print(f"   ❌ 整段語音合成失敗: {e}")
-        return None
-
-def text_to_speech_ithuan_single_word(羅馬拼音):
-    """單詞語音合成（按照 TauPhahJi-BangTsam 規範）"""
-    try:
-        print(f"🔊 單詞語音合成: '{羅馬拼音}'")
-        
-        # 根據文檔規範構建API請求
-        api_config = ITHUAN_API["單詞語音合成"]
-        base_url = f"{api_config['網域']}{api_config['端點']}"
-        
-        # GET 請求參數
-        params = {
-            'taibun': 羅馬拼音
-        }
-        
-        print(f"   📡 API 端點: {base_url}")
-        print(f"   📤 請求參數: {params}")
-        print(f"   🔧 請求方法: {api_config['方法']}")
-        
-        # 按照文檔範例構建URL
-        # encodeURI + encodeURIComponent
-        encoded_taibun = quote(羅馬拼音, safe='')
-        full_url = f"{base_url}?taibun={encoded_taibun}"
-        print(f"   🌐 完整URL: {full_url}")
-        
-        # 發送 GET 請求
-        response = requests.get(
-            full_url,
-            timeout=30,
-            headers={
-                'User-Agent': 'TaiwaneseVoiceChat/1.0',
-                'Accept': 'audio/wav, audio/*, */*',
-                'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8'
-            }
-        )
-        
-        print(f"   📥 回應狀態: {response.status_code}")
-        print(f"   📋 Content-Type: {response.headers.get('content-type', 'unknown')}")
-        print(f"   📏 回應大小: {len(response.content)} bytes")
-        
-        # 不管狀態碼如何，都檢查是否有音檔數據
-        if len(response.content) > 100:
-            content_type = response.headers.get('content-type', '').lower()
-            print(f"   🔍 檢查音檔內容: 大小={len(response.content)}, type='{content_type}'")
-            
-            # 檢查是否為音訊內容（更寬鬆的判斷）
-            is_audio = (
-                'audio' in content_type or 
-                len(response.content) > 1000 or
-                response.content.startswith(b'RIFF') or  # WAV檔案標頭
-                response.content.startswith(b'ID3') or   # MP3檔案標頭
-                response.content.startswith(b'\xff\xfb') # MP3檔案標頭變種
-            )
-            
-            if is_audio:
-                # 儲存音檔（即使是404也嘗試保存）
-                timestamp = int(time.time())
-                # 清理檔名，移除不合法字符
-                import re
-                safe_filename = re.sub(r'[<>:"/\\|?*,]', '_', 羅馬拼音.replace(' ', '_').replace('-', '_'))[:20]
-                output_file = f"static/tts_word_{safe_filename}_{timestamp}.wav"
-                
-                # 確保 static 目錄存在
-                os.makedirs("static", exist_ok=True)
-                
-                with open(output_file, 'wb') as f:
-                    f.write(response.content)
-                
-                print(f"   ✅ 發現音檔數據並保存: {output_file} (狀態碼: {response.status_code})")
-                return output_file
-            else:
-                print(f"   ⚠️ 回應不像音訊格式")
-                # 如果是文字回應，顯示內容
-                if response.content:
-                    try:
-                        text_content = response.content.decode('utf-8', errors='ignore')[:200]
-                        print(f"   📋 文字回應: {text_content}")
-                    except:
-                        print(f"   📋 二進位回應: {response.content[:50]}")
-        else:
-            print(f"   ⚠️ 回應太小（{len(response.content)} bytes），可能不是音檔")
-            if response.content:
-                try:
-                    text_content = response.content.decode('utf-8', errors='ignore')[:200]
-                    print(f"   📋 小回應內容: {text_content}")
-                except:
-                    print(f"   📋 小回應二進位: {response.content}")
-        
-        return None
-        
-    except Exception as e:
-        print(f"   ❌ 單詞語音合成失敗: {e}")
-        return None
-
-
-
 @performance_timer("LLM智能對話")
 def chat_with_ollama(text):
-    """與 Ollama LLM 對話"""
+    """
+    與本地 Ollama LLM 進行對話
+    """
     try:
         debug_print(f"LLM 對話處理: '{text}'")
         
@@ -792,35 +642,15 @@ def chat_with_ollama(text):
         debug_print(f"LLM 對話失敗: {e}")
         return "好的！"
 
-@performance_timer("意傳科技TTS服務")
-def text_to_speech_ithuan(text, kiatko_data=None):
-    """意傳科技 TTS 主函數（整合整段和單詞合成）"""
-    print(f"🔊 意傳科技 TTS 開始: '{text}'")
-    
-    # 優先嘗試整段語音合成
-    print("🎯 嘗試整段語音合成...")
-    full_audio = text_to_speech_ithuan_full_sentence("閩南語", text)
-    if full_audio:
-        print(f"✅ 整段語音合成成功: {full_audio}")
-        return full_audio
-    
-    # 如果整段失敗，且有分詞資料，嘗試合成第一個詞
-    if kiatko_data and len(kiatko_data) > 0:
-        print("🎯 嘗試單詞語音合成...")
-        first_word = kiatko_data[0]
-        if 'KIP' in first_word and first_word['KIP']:
-            single_audio = text_to_speech_ithuan_single_word(first_word['KIP'])
-            if single_audio:
-                print(f"✅ 單詞語音合成成功: {single_audio}")
-                return single_audio
-    
-    print("❌ 所有意傳科技 TTS 方案都失敗")
-    return None
-
 @app.route('/')
 def index():
     """主頁面"""
     return render_template('index.html')
+
+@app.route('/flashcard')
+def flashcard():
+    """字母卡頁面"""
+    return render_template('flashcard.html')
 
 @app.route('/process_audio', methods=['POST'])
 def process_audio():
@@ -937,13 +767,12 @@ def process_audio():
             # 步驟7: 文字轉語音（使用自訓練遠端 TTS 服務）
             step_start = time.time()
             print(f"\n🔊 步驟7: 台語語音合成")
-            print(f"使用自訓練遠端 TTS 服務 (163.13.202.125:5000)")
             audio_file_path = None
             if remote_tts_service:
+                print(f"使用自訓練遠端 TTS 服務 ({remote_tts_service.base_url})")
                 audio_file_path = remote_tts_service.generate_speech(numeric_tone_text)
             else:
-                print("⚠️ 遠端TTS服務未初始化，使用意傳科技TTS作為備用")
-                audio_file_path = text_to_speech_ithuan(romanization, kiatko_data)
+                print("⚠️ 遠端TTS服務未初始化，無法進行語音合成。")
             step_times['語音合成'] = time.time() - step_start
             log_step_time("台語語音合成", step_times['語音合成'], f"音檔: {audio_file_path if audio_file_path else '失敗'}")
             
@@ -977,7 +806,7 @@ def process_audio():
                 'segmented': segmented,
                 'kiatko_count': len(kiatko_data),
                 'audio_url': f'/{audio_file_path}' if audio_file_path else None,
-                'api_info': f"使用自訓練遠端 TTS 服務 (163.13.202.125:5000)" if remote_tts_service and audio_file_path else "使用意傳科技TTS作為備用",
+                'api_info': f"使用自訓練遠端 TTS 服務 ({remote_tts_service.base_url})" if remote_tts_service and audio_file_path else "遠端TTS服務未初始化",
                 'performance_stats': {
                     'total_time': total_time,
                     'step_times': step_times,
@@ -1010,6 +839,50 @@ def process_audio():
             'error': str(e)
         }), 500
 
+@app.route('/generate_flashcard', methods=['POST'])
+def generate_flashcard():
+    """產生字母卡的後端 API"""
+    try:
+        data = request.get_json()
+        if not data or 'text' not in data:
+            return jsonify({'success': False, 'error': '請求缺少文字內容'}), 400
+
+        text = data['text'].strip()
+        if not text:
+            return jsonify({'success': False, 'error': '文字內容不可為空'}), 400
+
+        # 步驟1: 台語標音轉換
+        romanization, _, kiatko_data = get_taiwanese_pronunciation(text)
+        if not romanization:
+            return jsonify({'success': False, 'error': '無法取得羅馬拼音'}), 500
+
+        # 步驟2: 格式轉換（羅馬拼音轉數字調）
+        if romanization_converter:
+            numeric_tone_text = romanization_converter.convert_to_numeric_tone(romanization)
+        else:
+            numeric_tone_text = romanization
+
+        # 步驟3: 文字轉語音
+        audio_file_path = None
+        if remote_tts_service:
+            audio_file_path = remote_tts_service.generate_speech(numeric_tone_text)
+        else:
+            print("⚠️ 遠端TTS服務未初始化，無法進行語音合成。")
+
+        # 組合回傳結果
+        result = {
+            'success': True,
+            'original_text': text,
+            'romanization': romanization,
+            'numeric_tone_text': numeric_tone_text,
+            'audio_url': f'/{audio_file_path}' if audio_file_path else None
+        }
+        return jsonify(result)
+
+    except Exception as e:
+        debug_print(f"產生字母卡失敗: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/test_api')
 def test_api():
     """測試意傳科技 API（按照 TauPhahJi-BangTsam 規範）"""
@@ -1022,9 +895,9 @@ def test_api():
         romanization, segmented, kiatko_data = get_taiwanese_pronunciation(test_text)
         print(f"🔤 測試標音結果: '{romanization}'")
         
-        # 測試 TTS API
-        print(f"🔊 測試 TTS 輸入: '{romanization}' (羅馬拼音)")
-        audio_file = text_to_speech_ithuan(romanization, kiatko_data)
+        # 測試 TTS API - 已停用
+        print(f"🔊 意傳科技 TTS 服務已停用，所有語音合成均由自訓練遠端TTS處理。")
+        audio_file = None
         
         result = {
             'test_text': test_text,
@@ -1032,10 +905,10 @@ def test_api():
             'segmented': segmented,
             'kiatko_count': len(kiatko_data),
             'audio_file': audio_file,
-            'api_status': 'success' if audio_file else 'failed',
+            'api_status': 'success (標音), TTS (停用)',
             'api_info': {
                 '標音服務': f"{ITHUAN_API['標音服務']['網域']}{ITHUAN_API['標音服務']['端點']}",
-                '遠端TTS': "未配置" # config.get_remote_tts_display_name() if remote_tts_service and config.is_remote_tts_configured() else "未配置"
+                '遠端TTS': remote_tts_service.base_url if remote_tts_service else "未配置"
             }
         }
         
@@ -1093,8 +966,10 @@ def serve_static(filename):
 if __name__ == '__main__':
     print("🎯 啟動台語語音對話 Web 應用程式")
     print("🌐 整合意傳科技 API（基於 TauPhahJi-BangTsam 規範）")
-    print("🔧 已修復404錯誤音檔捕獲問題")
-    print("📚 API 文檔來源: TauPhahJi-API-docs/API和組件文檔.md")
+    
+    # 在啟動時執行一次清理
+    cleanup_temp_files()
+    
     print("=" * 50)
     
     # 顯示API配置資訊
@@ -1109,7 +984,6 @@ if __name__ == '__main__':
     model_ready = init_taiwanese_model()
     
     # 初始化TTS服務和格式轉換器
-    
     print("初始化自訓練遠端TTS服務...")
     try:
         remote_tts_service = RemoteTtsService()
@@ -1119,11 +993,10 @@ if __name__ == '__main__':
         if remote_tts_service.test_connection():
             print("遠端TTS服務連線測試成功")
         else:
-            print("遠端TTS服務連線測試失敗")
+            print("⚠️ 遠端TTS服務連線測試失敗")
             
     except Exception as e:
-        print(f"遠端TTS服務初始化失敗: {e}")
-        print("系統無法正常運作")
+        print(f"❌ 遠端TTS服務初始化失敗: {e}")
         remote_tts_service = None
     
     print("初始化羅馬拼音格式轉換器...")
@@ -1131,18 +1004,13 @@ if __name__ == '__main__':
         romanization_converter = RomanizationConverter()
         print("羅馬拼音轉換器初始化成功")
     except Exception as e:
-        print(f"羅馬拼音轉換器初始化失敗: {e}")
-        print("將直接使用原始格式")
+        print(f"❌ 羅馬拼音轉換器初始化失敗: {e}")
         romanization_converter = None
     
     if model_ready:
-        print("系統初始化完成！")
-        print("啟動 Web 服務...")
-        print("訪問 http://localhost:5000 開始使用")
-        print("訪問 http://localhost:5000/test_api 測試 API")
-        print("=" * 50)
-        
-        app.run(debug=True, host='0.0.0.0', port=5000)
+        print("✅ 台語模型初始化成功")
     else:
-        print("系統初始化失敗，無法啟動 Web 服務")
-        print("請檢查模型安裝和相關依賴") 
+        print("❌ 台語模型初始化失敗，某些功能可能無法使用")
+        
+    app.run(host='0.0.0.0', port=5000, debug=True) 
+    app.run(host='0.0.0.0', port=5000, debug=True) 
