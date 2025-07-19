@@ -963,7 +963,6 @@ if __name__ == '__main__':
     for service_name, config in ITHUAN_API.items():
         print(f"   {service_name}: {config['網域']}{config['端點']} ({config['方法']})")
     
-    print(f"⚠️ 使用限制: 每IP每分鐘最多{API_LIMITS['每分鐘下載限制']}次音檔下載")
     print("=" * 50)
     
     # 初始化台語模型
