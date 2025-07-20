@@ -11,10 +11,22 @@ import requests
 import re
 from urllib.parse import urlencode
 
+# 載入 .env 檔案以確保環境變數可用
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # 如果沒安裝 python-dotenv，繼續執行（但可能無法讀取 .env）
+    pass
+
 class RemoteTtsService:
     """遠端 TTS 服務類別"""
     
-    def __init__(self, remote_host="163.13.202.125", remote_port=5000):
+    def __init__(self, remote_host=None, remote_port=5000):
+        # 從環境變數讀取 TTS 伺服器 IP，如果沒有設定則使用預設值或傳入參數
+        if remote_host is None:
+            remote_host = os.getenv('TTS_SERVER_IP', '請設定您的遠端TTS伺服器IP')
+        
         self.remote_host = remote_host
         self.remote_port = remote_port
         self.base_url = f"http://{remote_host}:{remote_port}"

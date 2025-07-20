@@ -12,6 +12,10 @@ import tempfile
 import subprocess
 import re
 from flask import Flask, render_template, request, jsonify, send_file
+
+# 載入 .env 檔案
+from dotenv import load_dotenv
+load_dotenv()
 import librosa
 import soundfile as sf
 import numpy as np
